@@ -1,0 +1,1301 @@
+service: acme-bots
+
+custom:
+    username: ${file(./config/config.yml):username}
+    email: ${file(./config/config.yml):email}
+    hooks:
+        after:aws:deploy:finalize:cleanup:
+            #- node ../bots/scripts/setup.js
+            - node ../frontend/scripts/setup.js
+        before:remove:remove:
+            - node ../frontend/scripts/detachPrincipals.js
+            - node ../bots/scripts/clear-ecr-repo.js
+            - node ../bots/scripts/clear-ecs-cluster.js
+    backend:
+        metricNameSpace: ${file(./config/config.yml):metricNameSpace}
+        lowBatteryBotsCountMetric: ${file(./config/config.yml):lowBatteryBotsCountMetric}
+        eventsDelayMetric: ${file(./config/config.yml):eventsDelayMetric}
+        lowBatteryThreshold: ${file(./config/config.yml):lowBatteryThreshold}
+        cwEventsDelayThreshold: ${file(./config/config.yml):cwEventsDelayThreshold}
+        lowBatteryBotsCountAlarm: ${file(./config/config.yml):lowBatteryBotsCountAlarm}
+    client:
+        bucketName: acmebots-client-hosting
+        distributionFolder: ../frontend/build
+    # GitHub Configuration
+    GitHubUser: ${file(./config/config.yml):GitHubUser}
+    GitHubRepository: ${file(./config/config.yml):GitHubRepository}
+    GitHubBranch: ${file(./config/config.yml):GitHubBranch}
+    GitHubOAuthToken: ${file(./config/config.yml):GitHubOAuthToken}
+    LambdaS3Bucket: ${file(./config/config.yml):LambdaS3Bucket}
+    # Repo Name can only be lowercase letters, numbers, hyphens, underscores, or forward slashes
+    DockerRepoName: ${self:service}-${self:provider.stage}
+    DockerImageTag: latest
+    SubnetConfig:
+        VPC:
+            CIDR: '10.0.0.0/16'
+        PublicOne:
+            CIDR: '10.0.0.0/24'
+        PublicTwo:
+            CIDR: '10.0.1.0/24'
+        PrivateOne:
+            CIDR: '10.0.2.0/24'
+        PrivateTwo:
+            CIDR: '10.0.3.0/24'
+
+provider:
+    name: aws
+    stage: dev
+    region: us-east-1
+    deploymentBucket: mybuckethere
+    runtime: nodejs6.10
+    tracing: true
+    # Look at 'serverless-iam-roles-per-function' plugin to define roles per function
+    iamRoleStatements: # permissions for all of your functions can be set here
+        - Effect: Allow
+          Action: # Gives permission to DynamoDB tables in a specific region
+            - cloudwatch:PutMetricData
+            - dynamodb:*
+            - events:PutEvents
+            - iot:*
+            - s3:*
+            - xray:PutTraceSegments
+            - xray:PutTelemetryRecords
+            - cloudwatch:PutMetricData
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - events:PutEvents
+            - ecs:*
+            - ecr:*
+            - states:StartExecution
+            - sns:Publish
+            - xray:PutTraceSegments
+            - xray:PutTelemetryRecords
+          Resource: "*"
+        - Effect: Allow
+          Action: # Gives Lambda Permission to PassRoles to ECS
+            - iam:GetRole
+            - iam:PassRole
+          Resource: "*"
+
+functions:
+    iotProvisionThing:
+        handler: src/step-functions/provisionThing.provisionThing
+        environment:
+            STATE_MACHINE_ARN: arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:stateMachine:iotCreateThingStepFunction
+    iotRemoveThing:
+        handler: src/step-functions/removeThing.removeThing
+        environment:
+            STATE_MACHINE_ARN: arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:stateMachine:iotDeleteThingStepFunction
+    iotCheckIfThingExists:
+        handler: src/iot/checkIfThingExists.checkIfThingExists
+    iotCreateThing:
+        handler: src/iot/createThing.createThing
+    iotCreateKeysAndCert:
+        handler: src/iot/createKeysAndCert.createKeysAndCert
+        environment:
+            S3_BUCKET: ${self:service}-${self:provider.stage}-keys-and-certs-#{AWS::AccountId}-#{AWS::Region}
+    iotCreatePolicy:
+        handler: src/iot/createPolicy.createPolicy
+    iotCheckProvisioning:
+        handler: src/iot/checkProvisioning.checkProvisioning
+        environment:
+            S3_BUCKET: ${self:service}-${self:provider.stage}-keys-and-certs-#{AWS::AccountId}-#{AWS::Region}
+            THINGS_TABLE: ${file(./config/config.yml):iotThingsTableName}
+    iotAttachPolicyToCert:
+        handler: src/iot/attachPolicyToCert.attachPolicyToCert
+    iotAttachCertToThing:
+        handler: src/iot/attachCertToThing.attachCertToThing
+    iotCheckThingAttachments:
+        handler: src/iot/checkThingAttachments.checkThingAttachments
+    iotDisableCert:
+        handler: src/iot/disableCert.disableCert
+        environment:
+            THINGS_TABLE: ${file(./config/config.yml):iotThingsTableName}
+    iotDetachPolicyFromCert:
+        handler: src/iot/detachPolicyFromCert.detachPolicyFromCert
+    iotDetachCertFromThing:
+        handler: src/iot/detachCertFromThing.detachCertFromThing
+    iotDeletePolicy:
+        handler: src/iot/deletePolicy.deletePolicy
+    iotDeleteCert:
+        handler: src/iot/deleteCert.deleteCert
+        environment:
+            S3_BUCKET: ${self:service}-${self:provider.stage}-keys-and-certs-#{AWS::AccountId}-#{AWS::Region}
+    iotDeleteThing:
+        handler: src/iot/deleteThing.deleteThing
+    iotDeleteMetadata:
+        handler: src/iot/deleteMetadata.deleteMetadata
+        environment:
+            THINGS_TABLE: ${file(./config/config.yml):iotThingsTableName}
+    handleTelemetryData:
+        handler: src/iotRules/handleTelemetryData.handleTelemetryData
+        environment:
+            THINGS_TABLE: ${file(./config/config.yml):iotThingsTableName}
+        events:
+            - iot:
+                sql: "SELECT topic(2) as dimension, telemetry from 'myThings/+/telemetry'"
+                enabled: true
+                name: "AcmeBotsHandleTelemetryData"
+                description: "Tracks bots telemetry as cw custom metrics"
+    trackConnectivity:
+        handler: src/iotRules/trackConnectivity.trackConnectivity
+        events:
+            - iot:
+                sql: "SELECT * from '$aws/events/presence/#'"
+                enabled: true
+                name: "AcmeBotsTrackConnectivity"
+                description: "Share bots connection status through CloudWatch Events"
+    processAcmeBotsConnectivityEvents:
+        handler: src/cwEvents/processAcmeBotsConnectivityEvents.handler
+        environment:
+            THINGS_TABLE: ${file(./config/config.yml):iotThingsTableName}
+        events:
+            - cloudwatchEvent:
+                name: acme-bots-process-connectivity
+                description: Triggered by an IoT rule whenever a bot connects to AWS IoT.
+                event:
+                    source:
+                        - "acmebots.connectivity"
+    processAcmeBotsStatusEvents:
+        handler: src/cwEvents/processAcmeBotsStatusEvents.handler
+        environment:
+            THINGS_TABLE: ${file(./config/config.yml):iotThingsTableName}
+        events:
+            - cloudwatchEvent:
+                name: acme-bots-process-status
+                description: Triggered by an IoT rule whenever a bot sends telemetry to AWS IoT.
+                event:
+                    source:
+                        - "acmebots.status"
+    ecsProvisionBot:
+        handler: src/bot/ecsProvisionBot.ecsProvisionBot
+        runtime: nodejs6.10
+        timeout: 25
+        environment:
+            TASK_EXEC_ROLE_ARN:
+                Fn::GetAtt:
+                    - ECSTaskExecutionRole
+                    - Arn
+            TASK_ROLE_ARN:
+                Fn::GetAtt:
+                    - ECSTaskRole
+                    - Arn
+            SERVICE: ${self:service}
+            STAGE: ${self:provider.stage}
+            DOCKER_IMAGE: "#{AWS::AccountId}.dkr.ecr.#{AWS::Region}.amazonaws.com/${self:custom.DockerRepoName}"
+            CLUSTER:
+                Ref: ECSCluster
+            SUBNETS:
+                Fn::Join:
+                    - ','
+                    - - Ref: PrivateSubnetOne
+                      - Ref: PrivateSubnetTwo
+            TASK_SECGROUP:
+                Ref: FargateContainerSecurityGroup
+
+    ecsDeleteBot:
+        handler: src/bot/ecsDeleteBot.ecsDeleteBot
+        runtime: nodejs6.10
+        timeout: 25
+        environment:
+            SERVICE: ${self:service}
+            STAGE: ${self:provider.stage}
+            CLUSTER:
+                Ref: ECSCluster
+     
+    searchLowBatteryBots:
+        handler: src/cwEvents/searchLowBatteryBots.handler
+        environment:
+            TABLE_NAME: ${file(./config/config.yml):iotThingsTableName}
+            INDEX_NAME: lowBatteryDetectedIndex
+            METRIC_NAMESPACE: ${self:custom.backend.metricNameSpace}
+            METRIC_NAME: ${self:custom.backend.lowBatteryBotsCountMetric}
+            METRIC_UNIT: Count
+        events:
+            -
+                schedule:
+                    name: acme-bots-search-low-battery-bots
+                    description: 'Search for bots with battery life less than 10%.'
+                    rate: rate(1 minute)
+                    enabled: true
+                        
+stepFunctions:
+    stateMachines:
+        iotCreateThingStepFunction:
+            name: iotCreateThingStepFunction
+            definition:
+                Comment: "If a thing with the same name does not exists, create it and attach a new cert and policy to it."
+                StartAt: fetchThing
+                States:
+                    fetchThing:
+                        Type: Task
+                        Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotCheckIfThingExists
+                        Next: doesThingExists
+                    doesThingExists:
+                        Type: Choice
+                        Choices:
+                        - Variable: "$.exists"
+                          BooleanEquals: true
+                          Next: thingAlreadyExistsFail
+                        - Variable: "$.exists"
+                          BooleanEquals: false
+                          Next: provisionThing
+                    thingAlreadyExistsFail:
+                        Type: Fail
+                        Error: Thing already exists.
+                    provisionThing:
+                        Type: Parallel
+                        Next: checkProvisioning
+                        Branches:
+                            - StartAt: createThing
+                              States:
+                                createThing:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotCreateThing
+                                    End: true
+                            - StartAt: createKeysAndCerts
+                              States:
+                                createKeysAndCerts:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotCreateKeysAndCert
+                                    End: true
+                            - StartAt: createPolicy
+                              States:
+                                createPolicy:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotCreatePolicy
+                                    End: true
+                            - StartAt: createECSThing 
+                              States:
+                                createECSThing:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-ecsProvisionBot
+                                    End: true
+                    checkProvisioning:
+                        Type: Task
+                        Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotCheckProvisioning
+                        Next: attachResourses
+                    attachResourses:
+                        Type: Parallel
+                        Next: checkAttachments
+                        Branches:
+                            - StartAt: attachPolicyToCert
+                              States:
+                                attachPolicyToCert:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotAttachPolicyToCert
+                                    End: true
+                            - StartAt: attachCertToThing
+                              States:
+                                attachCertToThing:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotAttachCertToThing
+                                    End: true
+                    checkAttachments:
+                        Type: Task
+                        Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotCheckThingAttachments
+                        End: true
+        iotDeleteThingStepFunction:
+            name: iotDeleteThingStepFunction
+            definition:
+                Comment: "If the thing exists, delete it and any cert and policy attached to it."
+                StartAt: fetchThing
+                States:
+                    fetchThing:
+                        Type: Task
+                        Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotCheckIfThingExists
+                        Next: doesThingExists
+                    doesThingExists:
+                        Type: Choice
+                        Choices:
+                        - Variable: "$.exists"
+                          BooleanEquals: false
+                          Next: thingDoesNotExistsFail
+                        - Variable: "$.exists"
+                          BooleanEquals: true
+                          Next: disableCert
+                    thingDoesNotExistsFail:
+                        Type: Fail
+                        Error: Thing does not already exists.
+                    disableCert:
+                        Type: Task
+                        Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotDisableCert
+                        Next: detachEntities
+                    detachEntities:
+                        Type: Parallel
+                        Next: checkDetachments
+                        Branches:
+                            - StartAt: detachPolicyFromCert
+                              States:
+                                detachPolicyFromCert:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotDetachPolicyFromCert
+                                    End: true
+                            - StartAt: detachCertFromThing
+                              States:
+                                detachCertFromThing:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotDetachCertFromThing
+                                    End: true
+                    checkDetachments:
+                        Type: Pass
+                        Next: deleteResources
+                        OutputPath: $[0]
+                    deleteResources:
+                        Type: Parallel
+                        OutputPath: $[2]
+                        Next: deleteMetadata
+                        Branches:
+                            - StartAt: deletePolicy
+                              States:
+                                deletePolicy:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotDeletePolicy
+                                    End: true
+                            - StartAt: deleteCert
+                              States:
+                                deleteCert:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotDeleteCert
+                                    End: true
+                            - StartAt: deleteThing
+                              States:
+                                deleteThing:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotDeleteThing
+                                    End: true
+                            - StartAt: deleteECSThing
+                              States:
+                                deleteECSThing:
+                                    Type: Task
+                                    Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-ecsDeleteBot
+                                    End: true
+                    deleteMetadata:
+                        Type: Task
+                        Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-iotDeleteMetadata
+                        End: true           
+
+resources:
+    Resources:
+        iotThingsTable:
+            Type: AWS::DynamoDB::Table
+            Properties:
+                TableName: ${file(./config/config.yml):iotThingsTableName}
+                AttributeDefinitions:
+                    - AttributeName: thingName
+                      AttributeType: S
+                    - AttributeName: batteryLife
+                      AttributeType: N
+                    - AttributeName: lowBatteryDetected
+                      AttributeType: S
+                KeySchema:
+                    - AttributeName: thingName
+                      KeyType: HASH
+                ProvisionedThroughput:
+                    ReadCapacityUnits: 1
+                    WriteCapacityUnits: 1
+                GlobalSecondaryIndexes:
+                    -
+                        IndexName: lowBatteryDetectedIndex
+                        KeySchema:
+                            -
+                                AttributeName: lowBatteryDetected
+                                KeyType: HASH
+                            -
+                                AttributeName: batteryLife
+                                KeyType: RANGE
+                        Projection:                        
+                            NonKeyAttributes:
+                                - thingName
+                            ProjectionType: INCLUDE
+                        ProvisionedThroughput:
+                            ReadCapacityUnits: 1
+                            WriteCapacityUnits: 1
+        LambdaExecutionCleanupRole:
+          Type: AWS::IAM::Role
+          Properties:
+            AssumeRolePolicyDocument:
+              Statement:
+              - Effect: Allow
+                Principal:
+                  Service: [lambda.amazonaws.com]
+                Action: ['sts:AssumeRole']
+            Path: /
+            Policies:
+            - PolicyName: lambda-execute
+              PolicyDocument:
+                Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:*
+                  Resource: 'arn:aws:logs:*:*:*'
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                  Resource: 'arn:aws:s3:::*'
+            - PolicyName: lambda-basic-execution
+              PolicyDocument:
+                Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: '*'
+            - PolicyName: s3-object-delete
+              PolicyDocument:
+                Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:ListBucket
+                    - s3:DeleteObject
+                  Resource: '*'
+            - PolicyName: ecs-ecr-iot
+              PolicyDocument:
+                Statement:
+                - Effect: Allow
+                  Action:
+                    - ecs:*
+                    - ecr:*
+                    - iot:*
+                  Resource: '*'
+        CleanBucketFunction:
+          Type: "AWS::Lambda::Function"
+          DependsOn: LambdaExecutionCleanupRole
+          Properties:
+            Handler: clear-s3-bucket.clearS3Bucket
+            Role: 
+              Fn::GetAtt: LambdaExecutionCleanupRole.Arn
+            Runtime: nodejs8.10
+            Timeout: 25
+            Code: 
+              S3Bucket: ${self:custom.LambdaS3Bucket}
+              S3Key: "clear-s3-bucket.zip"
+    
+        CleanECRFunction:
+          Type: "AWS::Lambda::Function"
+          DependsOn: LambdaExecutionCleanupRole
+          Properties:
+            Handler: clear-ecr-repo.clearEcrRepo
+            Role:
+              Fn::GetAtt: LambdaExecutionCleanupRole.Arn
+            Runtime: nodejs8.10
+            Timeout: 25
+            Code:
+              S3Bucket: ${self:custom.LambdaS3Bucket}
+              S3Key: "clear-ecr-repo.zip"
+    
+        CleanECSFunction:
+          Type: "AWS::Lambda::Function"
+          DependsOn: LambdaExecutionCleanupRole
+          Properties:
+            Handler: clear-ecs-cluster.clearEcsCluster
+            Role:
+              Fn::GetAtt: LambdaExecutionCleanupRole.Arn
+            Runtime: nodejs8.10
+            Timeout: 25
+            Code:
+              S3Bucket: ${self:custom.LambdaS3Bucket}
+              S3Key: "clear-ecs-cluster.zip"
+    
+        CleanPrincipalsFunction:
+          Type: "AWS::Lambda::Function"
+          DependsOn: LambdaExecutionCleanupRole
+          Properties:
+            Handler: detachPrincipals.clearPrincipals
+            Role:
+              Fn::GetAtt: LambdaExecutionCleanupRole.Arn
+            Runtime: nodejs8.10
+            Timeout: 25
+            Code:
+              S3Bucket: ${self:custom.LambdaS3Bucket}
+              S3Key: "detachPrincipals.zip"
+
+        cleanupIotThingsBucket:
+          Type: Custom::cleanupIotThingsBucket
+          DependsOn:
+            - CleanBucketFunction
+            - iotThingsBucket
+          Properties:
+            ServiceToken:
+              Fn::GetAtt: CleanBucketFunction.Arn
+            BucketName: ${self:service}-${self:provider.stage}-keys-and-certs-#{AWS::AccountId}-#{AWS::Region}
+        cleanupBotArtifactS3Bucket:
+          Type: Custom::cleanupBotArtifactS3Bucket
+          DependsOn:
+            - CleanBucketFunction
+            - BotArtifactS3Bucket
+          Properties:
+            ServiceToken:
+              Fn::GetAtt: CleanBucketFunction.Arn
+            BucketName: ${self:service}-${self:provider.stage}-bot-artifacts-#{AWS::AccountId}-#{AWS::Region}
+        iotThingsBucket:
+            Type: AWS::S3::Bucket
+            Properties:
+                BucketName: ${self:service}-${self:provider.stage}-keys-and-certs-#{AWS::AccountId}-#{AWS::Region}
+            DeletionPolicy: Delete
+        BotArtifactS3Bucket:
+            Type: AWS::S3::Bucket
+            Properties:
+                BucketName: ${self:service}-${self:provider.stage}-bot-artifacts-#{AWS::AccountId}-#{AWS::Region}
+            DeletionPolicy: Delete
+        UserPool:
+            Type: "AWS::Cognito::UserPool"
+            Properties:
+                UserPoolName: ${self:service}-${self:provider.stage}-user_pool
+                AutoVerifiedAttributes:
+                    - email
+                MfaConfiguration: OFF
+                Schema:
+                    - AttributeDataType: String
+                      Name: email
+                      Required: true
+                AdminCreateUserConfig: 
+                    AllowAdminCreateUserOnly: true
+                    InviteMessageTemplate:
+                        EmailMessage:
+                            Fn::Sub: |
+                                <p>You are invited to join Acme Bots GUI. Your temporary password is as follows:</p>
+                                <p>
+                                username: {username}<br />
+                                Password: <strong>{####}</strong>
+                                </p>
+                                <p>
+                                Please sign in to the GUI with your username and temporary password provided above.
+                                </p>
+                        EmailSubject: Your temporary password for Acme Bots GUI
+                EmailVerificationMessage: "Your Acme Bots GUI verification code is {####}."
+        UserPoolUser:
+            Type: "AWS::Cognito::UserPoolUser"
+            Properties:
+                DesiredDeliveryMediums: 
+                    - EMAIL
+                UserAttributes: 
+                    - Name: email
+                      Value: ${self:custom.email}
+                Username: ${self:custom.username}
+                UserPoolId:
+                    Ref: UserPool
+        ReactAppClient:
+            Type: AWS::Cognito::UserPoolClient
+            Properties:
+                GenerateSecret: false
+                RefreshTokenValidity: 200
+                UserPoolId:
+                    Ref: UserPool
+        IdentityPool:
+            Type: "AWS::Cognito::IdentityPool"
+            Properties:
+                AllowUnauthenticatedIdentities: false
+                CognitoIdentityProviders:
+                    - ClientId:
+                        Ref: ReactAppClient
+                      ProviderName:
+                        Fn::GetAtt: UserPool.ProviderName
+        IdentityPoolAuthRole:
+            Type: "AWS::IAM::Role"
+            Properties:
+                AssumeRolePolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                        - Effect: "Allow"
+                          Principal:
+                            Federated:
+                              - "cognito-identity.amazonaws.com"
+                          Action:
+                            - "sts:AssumeRoleWithWebIdentity"
+                          Condition:
+                            StringEquals:
+                              cognito-identity.amazonaws.com:aud:
+                                Ref: IdentityPool
+                            ForAnyValue:StringLike:
+                              cognito-identity.amazonaws.com:amr: authenticated
+                ManagedPolicyArns:
+                    - arn:aws:iam::aws:policy/AWSIoTDataAccess
+                Path: "/"
+                Policies:
+                    - PolicyName: acmebots-scan-ddb
+                      PolicyDocument:
+                        Version: '2012-10-17'
+                        Statement:
+                            - Effect: Allow
+                              Action:
+                                - dynamodb:Scan
+                              Resource: arn:aws:dynamodb:#{AWS::Region}:#{AWS::AccountId}:table/${self:service}-${self:provider.stage}-iotThingsTable
+                    - PolicyName: acmebots-invoke-lambda-function
+                      PolicyDocument:
+                        Version: '2012-10-17'
+                        Statement:
+                            - Effect: Allow
+                              Action:
+                                - lambda:InvokeFunction
+                              Resource: 
+                                - arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${self:provider.stage}-iotProvisionThing*
+                                - arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${self:provider.stage}-iotRemoveThing*
+                    
+                    - PolicyName: acmebots-iot-attach-principal
+                      PolicyDocument:
+                        Version: '2012-10-17'
+                        Statement:
+                            - Effect: Allow
+                              Action:
+                                - iot:AttachPrincipalPolicy
+                              Resource: "*"
+        IdentityPoolRoleAttachment:
+            Type: AWS::Cognito::IdentityPoolRoleAttachment
+            Properties:
+                IdentityPoolId:
+                    Ref: IdentityPool
+                Roles:
+                    authenticated:
+                        Fn::GetAtt:
+                            - IdentityPoolAuthRole
+                            - Arn
+        cleanupPrincipals:
+          Type: Custom::cleanupPrincipals
+          DependsOn:
+            - CleanPrincipalsFunction
+            - AcmeBotsGuiIotPolicy
+          Properties:
+            ServiceToken: 
+              Fn::GetAtt: CleanPrincipalsFunction.Arn
+            PolicyName: ${self:service}-${self:provider.stage}-AcmeBotsGui
+        AcmeBotsGuiIotPolicy: 
+            Type: "AWS::IoT::Policy"
+            Properties: 
+                PolicyName: ${self:service}-${self:provider.stage}-AcmeBotsGui
+                PolicyDocument: 
+                    Version: "2012-10-17"
+                    Statement: 
+                        - 
+                            Effect: "Allow"
+                            Action: 
+                                - "iot:*"
+                            Resource: 
+                                - "*"
+        # BUILD VPC (2 public, 2 private subnets) AND ECS CLUSTER
+        VPC:
+            Type: AWS::EC2::VPC
+            Properties:
+                EnableDnsSupport: true
+                EnableDnsHostnames: true
+                CidrBlock: ${self:custom.SubnetConfig.VPC.CIDR}
+        PublicSubnetOne:
+            Type: AWS::EC2::Subnet
+            Properties:
+                AvailabilityZone: "#{AWS::Region}a"
+                VpcId:
+                    Ref: VPC
+                CidrBlock: ${self:custom.SubnetConfig.PublicOne.CIDR}
+                MapPublicIpOnLaunch: true
+        PublicSubnetTwo:
+            Type: AWS::EC2::Subnet
+            Properties:
+                AvailabilityZone: "#{AWS::Region}b"
+                VpcId:
+                    Ref: VPC
+                CidrBlock: ${self:custom.SubnetConfig.PublicTwo.CIDR}
+                MapPublicIpOnLaunch: true
+        PrivateSubnetOne:
+            Type: AWS::EC2::Subnet
+            Properties:
+                AvailabilityZone: "#{AWS::Region}a"
+                VpcId:
+                    Ref: VPC
+                CidrBlock: ${self:custom.SubnetConfig.PrivateOne.CIDR}
+        PrivateSubnetTwo:
+            Type: AWS::EC2::Subnet
+            Properties:
+                AvailabilityZone: "#{AWS::Region}b"
+                VpcId:
+                    Ref: VPC
+                CidrBlock: ${self:custom.SubnetConfig.PrivateTwo.CIDR}
+        InternetGateway:
+            Type: AWS::EC2::InternetGateway
+        GatewayAttachement:
+            Type: AWS::EC2::VPCGatewayAttachment
+            Properties:
+                VpcId:
+                    Ref: VPC
+                InternetGatewayId:
+                    Ref: InternetGateway
+        PublicRouteTable:
+            Type: AWS::EC2::RouteTable
+            Properties:
+                VpcId:
+                    Ref: VPC
+        PublicRoute:
+            Type: AWS::EC2::Route
+            DependsOn: GatewayAttachement
+            Properties:
+                RouteTableId:
+                    Ref: PublicRouteTable
+                DestinationCidrBlock: '0.0.0.0/0'
+                GatewayId:
+                    Ref: InternetGateway
+        PublicSubnetOneRouteTableAssociation:
+            Type: AWS::EC2::SubnetRouteTableAssociation
+            Properties:
+                SubnetId:
+                    Ref: PublicSubnetOne
+                RouteTableId:
+                    Ref: PublicRouteTable
+        PublicSubnetTwoRouteTableAssociation:
+            Type: AWS::EC2::SubnetRouteTableAssociation
+            Properties:
+                SubnetId:
+                    Ref: PublicSubnetTwo
+                RouteTableId:
+                    Ref: PublicRouteTable
+        NatGatewayOneAttachment:
+            Type: AWS::EC2::EIP
+            DependsOn: GatewayAttachement
+            Properties:
+                Domain: vpc
+        NatGatewayTwoAttachment:
+            Type: AWS::EC2::EIP
+            DependsOn: GatewayAttachement
+            Properties:
+                Domain: vpc
+        NatGatewayOne:
+            Type: AWS::EC2::NatGateway
+            Properties:
+                AllocationId:
+                    Fn::GetAtt:
+                        - NatGatewayOneAttachment
+                        - AllocationId
+                SubnetId:
+                    Ref: PublicSubnetOne
+        NatGatewayTwo:
+            Type: AWS::EC2::NatGateway
+            Properties:
+                AllocationId:
+                    Fn::GetAtt:
+                        - NatGatewayTwoAttachment
+                        - AllocationId
+                SubnetId:
+                    Ref: PublicSubnetTwo
+        PrivateRouteTableOne:
+            Type: AWS::EC2::RouteTable
+            Properties:
+                VpcId:
+                    Ref: VPC
+        PrivateRouteOne:
+            Type: AWS::EC2::Route
+            Properties:
+                RouteTableId:
+                    Ref: PrivateRouteTableOne
+                DestinationCidrBlock: 0.0.0.0/0
+                NatGatewayId:
+                    Ref: NatGatewayOne
+        PrivateRouteTableOneAssociation:
+            Type: AWS::EC2::SubnetRouteTableAssociation
+            Properties:
+                RouteTableId:
+                    Ref: PrivateRouteTableOne
+                SubnetId:
+                    Ref: PrivateSubnetOne
+        PrivateRouteTableTwo:
+            Type: AWS::EC2::RouteTable
+            Properties:
+                VpcId:
+                    Ref: VPC
+        PrivateRouteTwo:
+            Type: AWS::EC2::Route
+            Properties:
+                RouteTableId:
+                    Ref: PrivateRouteTableTwo
+                DestinationCidrBlock: 0.0.0.0/0
+                NatGatewayId:
+                    Ref: NatGatewayTwo
+        PrivateRouteTableTwoAssociation:
+            Type: AWS::EC2::SubnetRouteTableAssociation
+            Properties:
+                RouteTableId:
+                    Ref: PrivateRouteTableTwo
+                SubnetId:
+                    Ref: PrivateSubnetTwo
+        cleanupECSCluster:
+          Type: Custom::cleanupECSCluster
+          DependsOn:
+            - CleanECSFunction
+            - ECSCluster
+          Properties:
+            ServiceToken: 
+              Fn::GetAtt: CleanECSFunction.Arn
+            ECSTaskRoleArn: 
+              Fn::GetAtt ECSTaskRole.Arn
+            ECSClusterName:
+              Ref: ECSCluster
+        ECSCluster:
+            Type: AWS::ECS::Cluster
+
+        FargateContainerSecurityGroup:
+            Type: AWS::EC2::SecurityGroup
+            Properties:
+                GroupDescription: Access to the Fargate containers
+                VpcId:
+                    Ref: VPC
+        EcsSecurityGroupIngressFromSelf:
+            Type: AWS::EC2::SecurityGroupIngress
+            Properties:
+                Description: Ingress from other containers in the same security group
+                GroupId:
+                    Ref: FargateContainerSecurityGroup
+                IpProtocol: -1
+                SourceSecurityGroupId:
+                    Ref: FargateContainerSecurityGroup
+        ECSRole:
+            Type: AWS::IAM::Role
+            Properties:
+                AssumeRolePolicyDocument:
+                    Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service: [ecs.amazonaws.com]
+                      Action: ['sts:AssumeRole']
+                Path: /
+                Policies:
+                - PolicyName: ecs-service
+                  PolicyDocument:
+                      Statement:
+                      - Effect: Allow
+                        Action:
+                            # Rules which allow ECS to attach network interfaces to instances
+                            # on your behalf in order for awsvpc networking mode to work right
+                            - 'ec2:AttachNetworkInterface'
+                            - 'ec2:CreateNetworkInterface'
+                            - 'ec2:CreateNetworkInterfacePermission'
+                            - 'ec2:DeleteNetworkInterface'
+                            - 'ec2:DeleteNetworkInterfacePermission'
+                            - 'ec2:Describe*'
+                            - 'ec2:DetachNetworkInterface'
+                            # Rules which allow ECS to update load balancers on your behalf
+                            # with the information sabout how to send traffic to your containers
+                            - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+                            - 'elasticloadbalancing:DeregisterTargets'
+                            - 'elasticloadbalancing:Describe*'
+                            - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+                            - 'elasticloadbalancing:RegisterTargets'
+                        Resource: '*'
+        ECSTaskExecutionRole:
+            Type: AWS::IAM::Role
+            Properties:
+                AssumeRolePolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service: ecs-tasks.amazonaws.com
+                      Action: "sts:AssumeRole"
+                ManagedPolicyArns:
+                    - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+                Policies:
+                - PolicyName: AllowEcsTaskCreateLogGroup
+                  PolicyDocument:
+                      Version: '2012-10-17'
+                      Statement:
+                      - Effect: Allow
+                        Action:
+                            - 'logs:CreateLogGroup'
+                        Resource: '*'
+
+        CodePipelineRole:
+          Type: "AWS::IAM::Role"
+          Properties:
+            RoleName: CodePipelineRole-${self:service}-botpipeline-${self:provider.stage}
+            AssumeRolePolicyDocument:
+              Statement:
+              - Action: sts:AssumeRole
+                Effect: "Allow"
+                Principal:
+                  Service: codepipeline.amazonaws.com
+              Version: "2012-10-17"
+            Path: /
+            Policies:
+              - PolicyName: CodePipelineAccess
+                PolicyDocument:
+                  Version: "2012-10-17"
+                  Statement:
+                    -
+                      Effect: "Allow"
+                      Action:
+                        - "s3:DeleteObject"
+                        - "s3:GetObject"
+                        - "s3:GetObjectVersion"
+                        - "s3:ListBucket"
+                        - "s3:PutObject"
+                        - "s3:GetBucketPolicy"
+                      Resource:
+                        - Fn::GetAtt:
+                            - BotArtifactS3Bucket
+                            - Arn
+                        - Fn::Join:
+                            - ''
+                            - - Fn::GetAtt:
+                                  - BotArtifactS3Bucket
+                                  - Arn
+                              - "/*"
+                    -
+                      Effect: "Allow"
+                      Action:
+                        - "cloudformation:CreateChangeSet"
+                        - "cloudformation:CreateStack"
+                        - "cloudformation:CreateUploadBucket"
+                        - "cloudformation:DeleteStack"
+                        - "cloudformation:Describe*"
+                        - "cloudformation:List*"
+                        - "cloudformation:UpdateStack"
+                        - "cloudformation:ValidateTemplate"
+                        - "cloudformation:ExecuteChangeSet"
+                        - "cloudformation:DeleteChangeSet"
+                        - "cloudformation:SetStackPolicy"
+                      Resource: "*"
+                    -
+                      Effect: "Allow"
+                      Action:
+                        - "codebuild:StartBuild"
+                        - "codebuild:BatchGetBuilds"
+                      Resource: "*"
+ 
+        CodePipeline:
+          Type: AWS::CodePipeline::Pipeline
+          Properties:
+            Name: ${self:service}-botpipeline-${self:provider.stage}
+            RoleArn: 
+              Fn::GetAtt:
+                - CodePipelineRole 
+                - Arn
+            ArtifactStore:
+              Type: S3
+              Location: 
+                  Ref: BotArtifactS3Bucket
+            Stages:
+              -
+                Name: Source
+                Actions:
+                  -
+                    Name: GitHub
+                    ActionTypeId:
+                      Category: Source
+                      Owner: ThirdParty
+                      Version: 1
+                      Provider: GitHub
+                    OutputArtifacts:
+                      -  Name: SourceOutput
+                    Configuration:
+                      Owner: ${self:custom.GitHubUser}
+                      Repo: ${self:custom.GitHubRepository}
+                      Branch: ${self:custom.GitHubBranch}
+                      OAuthToken: ${self:custom.GitHubOAuthToken}
+              -
+                Name: Build
+                Actions:
+                  -
+                    Name: CodeBuild
+                    InputArtifacts:
+                      - Name: SourceOutput
+                    ActionTypeId:
+                      Category: Build
+                      Owner: AWS
+                      Version: 1
+                      Provider: CodeBuild
+                    OutputArtifacts:
+                      - Name: Built
+                    Configuration:
+                      ProjectName:
+                        Ref: CodeBuildProject
+        CodeBuildProject:
+            Type: AWS::CodeBuild::Project
+            Properties:
+                Name: "${self:service}-botbuild-${self:provider.stage}"
+                ServiceRole:
+                    Ref: CodeBuildRole
+                Artifacts:
+                    Type: CODEPIPELINE
+                Environment:
+                    Type: LINUX_CONTAINER
+                    ComputeType: BUILD_GENERAL1_SMALL
+                    Image: aws/codebuild/docker:17.09.0
+                    EnvironmentVariables:
+                        - Name: AWS_DEFAULT_REGION
+                          Type: PLAINTEXT
+                          Value: "#{AWS::Region}"
+                        - Name: AWS_ACCOUNT_ID
+                          Value: "#{AWS::AccountId}"
+                        - Name: IMAGE_REPO_NAME
+                          Value: "${self:custom.DockerRepoName}"
+                        - Name: IMAGE_TAG
+                          Value: "${self:custom.DockerImageTag}"
+                Source:
+                    Type: CODEPIPELINE
+                    BuildSpec: "bots/buildspec.yml"
+                TimeoutInMinutes: 10
+        CodeBuildRole:
+            Type: AWS::IAM::Role
+            Properties:
+                AssumeRolePolicyDocument:
+                    Statement:
+                    - Action: ['sts:AssumeRole']
+                      Effect: Allow
+                      Principal:
+                          Service: [codebuild.amazonaws.com]
+                    Version: '2012-10-17'
+                Path: /
+                Policies:
+                    - PolicyName: CodeBuildAccess
+                      PolicyDocument:
+                          Version: '2012-10-17'
+                          Statement:
+                              - Resource: "*"
+                                Effect: Allow
+                                Action:
+                                  - logs:CreateLogGroup
+                                  - logs:CreateLogStream
+                                  - logs:PutLogEvents
+                                  - ecr:GetAuthorizationToken
+                                  - ec2:CreateNetworkInterface
+                                  - ec2:DescribeNetworkInterfaces
+                                  - ec2:DeleteNetworkInterface
+                                  - ec2:DescribeSubnets
+                                  - ec2:DescribeSecurityGroups
+                                  - ec2:DescribeDhcpOptions
+                                  - ec2:DescribeVpcs
+                                  - ec2:CreateNetworkInterfacePermission
+                              - Resource: arn:aws:ecr:#{AWS::Region}:#{AWS::AccountId}:repository/${self:custom.DockerRepoName}
+                                Effect: Allow
+                                Action:
+                                  - ecr:GetDownloadUrlForLayer
+                                  - ecr:BatchGetImage
+                                  - ecr:BatchCheckLayerAvailability
+                                  - ecr:PutImage
+                                  - ecr:InitiateLayerUpload
+                                  - ecr:UploadLayerPart
+                                  - ecr:CompleteLayerUpload
+                              - Resource: 
+                                  - arn:aws:s3:::${self:service}-${self:provider.stage}-bot-artifacts-#{AWS::AccountId}-#{AWS::Region}
+                                  - arn:aws:s3:::${self:service}-${self:provider.stage}-bot-artifacts-#{AWS::AccountId}-#{AWS::Region}/*
+                                Effect: Allow
+                                Action:
+                                  - s3:CreateBucket
+                                  - s3:GetObject
+                                  - s3:List*
+                                  - s3:PutObject
+
+        cleanupECRRepo:
+          Type: Custom::cleanupECRRepo
+          DependsOn:
+            - CleanECRFunction
+            - ECRRepo
+          Properties:
+            ServiceToken:
+              Fn::GetAtt: CleanECRFunction.Arn
+            RepoName: ${self:custom.DockerRepoName}
+        ECRRepo:
+            Type: AWS::ECR::Repository
+            Properties:
+                RepositoryName: ${self:custom.DockerRepoName}
+
+        # BOT DEPLOY RESOURCES
+        ### TODO - Least Privilege
+        ECSTaskRole:
+            Type: "AWS::IAM::Role"
+            Properties:
+                AssumeRolePolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                        - Effect: Allow
+                          Principal:
+                              Service: ecs-tasks.amazonaws.com
+                          Action: "sts:AssumeRole"
+                ManagedPolicyArns:
+                    - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+                Policies:
+                    - PolicyName: AllowCloudFormationAccess
+                      PolicyDocument:
+                          Version: '2012-10-17'
+                          Statement:
+                          - Effect: Allow
+                            Action:
+                                - "cloudformation:DescribeStacks"
+                                - "cloudformation:DescribeStackEvents"
+                                - "cloudformation:DescribeStackResource"
+                                - "cloudformation:DescribeStackResources"
+                            Resource: '*'
+                    - PolicyName: AllowDynamoDBAccess
+                      PolicyDocument:
+                          Version: '2012-10-17'
+                          Statement:
+                          - Effect: Allow
+                            Action:
+                                - "dynamodb:BatchGetItem"
+                                - "dynamodb:BatchWriteItem"
+                                - "dynamodb:DeleteItem"
+                                - "dynamodb:GetItem"
+                                - "dynamodb:PutItem"
+                                - "dynamodb:Query"
+                                - "dynamodb:Scan"
+                                - "dynamodb:UpdateItem"
+                            Resource: '*'
+                    - PolicyName: AllowS3Access
+                      PolicyDocument:
+                          Version: '2012-10-17'
+                          Statement:
+                          - Effect: Allow
+                            Action:
+                                - "s3:GetObject"
+                                - "s3:PutObject"
+                            Resource: '*'
+                    - PolicyName: AllowIOTAccess
+                      PolicyDocument:
+                          Version: '2012-10-17'
+                          Statement:
+                          - Effect: Allow
+                            Action:
+                                - "iot:publish"
+                                - "iot:describeEndpoint"
+                            Resource: '*'
+                    # TODO - CloudWatch or XRay access?
+        AcmeBotsSnsTopic:
+            Type: AWS::SNS::Topic
+            Properties: 
+                DisplayName: AcmeBotsErrors
+                Subscription:
+                    -
+                        Endpoint: ${self:custom.email}
+                        Protocol: email
+                # TopicName: String
+        LowBatteryBotsCountAlarm:
+            Type: AWS::CloudWatch::Alarm
+            Properties:
+                ActionsEnabled: true
+                AlarmActions:
+                    - Ref: AcmeBotsSnsTopic
+                AlarmDescription: Enabled whenever the ${self:custom.backend.metricNameSpace}.${self:custom.backend.lowBatteryBotsCountMetric} metric is greater than 0.
+                AlarmName: ${self:custom.backend.lowBatteryBotsCountAlarm}
+                ComparisonOperator: GreaterThanThreshold
+                EvaluationPeriods: 1
+                MetricName: ${self:custom.backend.lowBatteryBotsCountMetric}
+                Namespace: ${self:custom.backend.metricNameSpace}
+                OKActions:
+                    - Ref: AcmeBotsSnsTopic
+                Period: 60
+                Statistic: Maximum
+                Threshold: 0
+                TreatMissingData: ignore
+                Unit: Count
+        cloudWatchEventsDelayAlarm:
+            Type: AWS::CloudWatch::Alarm
+            Properties:
+                AlarmDescription: Measure the number of milliseconds since a CW Event is raised and the lambda function process it.
+
+                ComparisonOperator: GreaterThanOrEqualToThreshold
+                EvaluationPeriods: 1
+                MetricName: ${self:custom.backend.eventsDelayMetric}
+                Namespace: ${self:custom.backend.metricNameSpace}
+                Period: 60
+                Statistic: Maximum
+                Threshold: ${self:custom.backend.cwEventsDelayThreshold}
+                TreatMissingData: ignore
+                Unit: Count
+        operationsDashboard:
+            Type: AWS::CloudWatch::Dashboard
+            Properties:
+                DashboardName: ${self:service}-${self:provider.stage}-Operations-#{AWS::Region}
+                DashboardBody: ${file(./src/dashboards/bots-operations.js):dashboard}
+
+    Outputs:
+        iotThingsTable:
+            Description: 'DynamoDB table that holds IoT things metadata.'
+            Value:
+                Ref: iotThingsTable
+        iotKeysAndCertsBucket:
+            Description: 'S3 bucket that stores iot things keys and certs.'
+            Value:
+                Ref: iotThingsBucket
+        UserPoolId:
+            Description: "The ID of the user pool that is created."
+            Value:
+                Ref: UserPool
+        ReactAppClientId:
+            Description: "The ID of the user pool react app client id."
+            Value:
+                Ref: ReactAppClient
+        IdentityPoolId:
+            Description: "The ID of the identity pool that is created."
+            Value:
+                Ref: IdentityPool
+        AcmeBotsGuiIotPolicy:
+            Description: The IoT policy name that should be attached to Cognito IDs.
+            Value:
+                Ref: AcmeBotsGuiIotPolicy
+        ECRRepo:
+            Description: 'The repository containing the docker image for the bot'
+            Value:
+                Ref: ECRRepo
+        BotArtifactS3Bucket:
+            Description: 'S3 bucket that stores Bot Build CodePipeline Artifacts.'
+            Value:
+                Ref: BotArtifactS3Bucket
+        CodeBuildProject:
+            Description: 'The project used to build the bot docker image from source'
+            Value:
+                Ref: CodeBuildProject
+        CodePipelineURL:
+            Description: 'The URL for the created pipeline'
+            Value: https://#{AWS::Region}.console.aws.amazon.com/codepipeline/home?region=#{AWS::Region}#/view/${self:service}-${self:provider.stage}
+        ECSClusterName:
+            Description: 'The ECS Cluster used for bot deployment'
+            Value:
+                Ref: ECSCluster
+        ECSTaskExecutionRoleArn:
+            Description: 'The Arn for the ECS Task Execution Role'
+            Value:
+                Fn::GetAtt:
+                    - ECSTaskExecutionRole
+                    - Arn
+        ECSTaskRoleArn:
+            Description: 'The Arn for the ECS Task Role'
+            Value:
+                Fn::GetAtt:
+                    - ECSTaskRole
+                    - Arn
+        VPCId:
+            Description: 'The ID of the VPC used by the ECS Cluster'
+            Value:
+                Ref: VPC
+        PublicSubnetOne:
+            Description: 'VPC Public Subnet One'
+            Value:
+                Ref: PublicSubnetOne
+        PublicSubnetTwo:
+            Description: 'VPC Public Subnet Two'
+            Value:
+                Ref: PublicSubnetTwo
+        PrivateSubnetOne:
+            Description: 'VPC Private Subnet One'
+            Value:
+                Ref: PrivateSubnetOne
+        PrivateSubnetTwo:
+            Description: 'VPC Private Subnet Two'
+            Value:
+                Ref: PrivateSubnetTwo
+        AcmeBotsSnsTopic:
+            Description: SNS topic that will receive low battery error messages
+            Value: 
+                Ref: AcmeBotsSnsTopic
+        LowBatteryBotsCountAlarm:
+            Value:
+                Ref: LowBatteryBotsCountAlarm
+        cloudWatchEventsDelayAlarm:
+            Value:
+                Ref: cloudWatchEventsDelayAlarm
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+  - serverless-plugin-tracing
+  - serverless-hooks-plugin
+  - serverless-finch

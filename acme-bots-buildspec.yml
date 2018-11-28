@@ -1,0 +1,41 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo Installing Node Pre-requisites and updating Serverless Config...
+      - npm install -g yarn serverless 
+      - ls 
+      - cd backend
+      - chmod 755 acme-bots-config.sh
+      - ./acme-bots-config.sh
+      - echo Configuration set as follows
+      - cat config/config.yml
+      - npm install
+      - cd ../frontend
+      - npm install
+      - yarn install
+      - echo Uploading lambda code to S3 
+      - cd ..
+      - mkdir lambda-code 
+      - cd lambda-code
+      - zip -j clear-ecr-repo.zip ../backend/src/cleanup/clear-ecr-repo.js
+      - zip -j clear-ecs-cluster.zip ../backend/src/cleanup/clear-ecs-cluster.js
+      - zip -j clear-s3-bucket.zip ../backend/src/cleanup/clear-s3-bucket.js
+      - zip -j detachPrincipals.zip ../backend/src/cleanup/detachPrincipals.js
+      - aws s3 sync . "s3://$ArtifactS3Bucket"
+  build:
+    commands:
+      - echo Serverless deploy started on `date`
+      - cd ../backend 
+      - serverless deploy | tee deploy.out 
+      - echo Front end deploy started on `date`
+      - cd ../frontend
+      - node scripts/setup.js
+      - npm run build
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing static website to s3
+      - aws s3 sync --delete build/ "s3://$S3BUCKET"
+

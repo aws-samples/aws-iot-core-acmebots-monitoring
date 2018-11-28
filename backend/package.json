@@ -1,0 +1,17 @@
+{
+  "name": "iot-demo",
+  "description": "",
+  "version": "0.1.0",
+  "dependencies": {
+    "aws-xray-sdk": "^1.2.0",
+    "json-size": "^1.0.0",
+    "npm": "^6.2.0",
+    "serverless-finch": "^2.2.0",
+    "serverless-hooks-plugin": "^1.1.0",
+    "serverless-pseudo-parameters": "^1.6.0"
+  },
+  "devDependencies": {
+    "serverless-plugin-tracing": "^2.0.0",
+    "serverless-step-functions": "^1.6.1"
+  }
+}

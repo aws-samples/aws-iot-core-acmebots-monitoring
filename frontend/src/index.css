@@ -1,0 +1,10 @@
+body {
+  margin: 0;
+  padding: 0;
+  font-family: sans-serif;
+}
+
+.pie-row .pie-wrap > div {
+  background: red;
+  margin: 0 auto;
+}

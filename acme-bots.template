@@ -1,0 +1,542 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Acme-bots deployment CloudFormation template.  This template uses CodePipeline
+  to deploy a serverless IoT application from GitHub.
+
+Parameters:
+
+  UserName:
+    Type: String
+    Description: Admin user name to create for service access.
+    Default: acmebotsadmin
+
+  Email:
+    Type: String
+    Description: Valid email to sent admin user password.
+    #AllowedPattern: '/[^\s@]+@[^\s@]+\.[^\s@]+/'
+    #ConstraintDescription: Enter a valid email
+
+  Stage:
+    Type: String
+    Description: Stage for deployment (dev, test, prod)
+    Default: dev
+
+  GitHubOAuthToken: 
+    Description: Enter GitHub Personal Access Token from https://github.com/settings/tokens
+    Type: String
+
+  GitHubUser:
+    Description: Enter your GitHub username
+    Type: String
+
+  GitHubRepository:
+    Description: Enter the repository name that should be monitored for changes
+    Type: String
+
+  GitHubBranch:
+    Description: Enter the GitHub branch to monitored
+    Type: String
+    Default: master
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - 
+        Label: 
+          default: Application Configuration
+        Parameters:
+          - UserName
+          - Email
+          - Stage
+      - 
+        Label:
+          default: GitHub Configuration
+        Parameters:
+          - GitHubOAuthToken
+          - GitHubUser
+          - GitHubRepository
+          - GitHubBranch
+          
+    ParameterLabels:
+      UserName: 
+        default: Admin User Name
+      Email:
+        default: E-mail address
+      Stage:
+        default: Stage
+      GitHubUser: 
+        default: GitHub User
+      GitHubRepository: 
+        default: Repository Name
+      GitHubBranch: 
+        default: Repository Branch
+      GitHubOAuthToken: 
+        default: OAuth2 Token
+
+Resources:
+  LambdaExecutionS3CleanupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: lambda-execute
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:*
+            Resource: 'arn:aws:logs:*:*:*'
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: 'arn:aws:s3:::*'
+      - PolicyName: lambda-basic-execution
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+      - PolicyName: s3-object-delete
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:DeleteObject
+            Resource: '*'
+
+  CleanBucketFunction: 
+    Type: "AWS::Lambda::Function"
+    DependsOn: LambdaExecutionS3CleanupRole
+    Properties: 
+      Handler: "index.clearS3Bucket"
+      Role: !GetAtt LambdaExecutionS3CleanupRole.Arn
+      Runtime: "nodejs8.10"
+      Timeout: 25
+      Code: 
+        ZipFile: >
+          'use strict';
+          
+          var AWS      = require('aws-sdk');
+          var s3       = new AWS.S3();
+          
+          module.exports =  {
+            clearS3Bucket: function (event, context, cb) {
+              console.log("Event=", event);
+              console.log("Context=", context);
+              if (event.RequestType === 'Delete')  {
+                  var bucketName = event.ResourceProperties.BucketName;
+           
+                  console.log("Delete bucket requested for", bucketName);
+          
+                  var objects = listObjects(s3, bucketName);
+      
+                  objects.then(function(result) {
+                     var keysToDeleteArray = [];
+                     console.log("Found "+ result.Contents.length + " objects to delete.");
+                     if (result.Contents.length === 0) {
+                         sendResponse(event, context, "SUCCESS");
+                     } else {
+                         for (var i = 0, len = result.Contents.length; i < len; i++) {
+                             var item =  new Object();
+                             item = {};
+                             item = { Key: result.Contents[i].Key };
+                             keysToDeleteArray.push(item);
+                         }
+        
+                         var delete_params = {
+                             Bucket: bucketName, 
+                             Delete: {
+                               Objects: keysToDeleteArray,
+                               Quiet: false
+                             }
+                         };
+      
+                         var deletedObjects = deleteObjects(s3, delete_params);
+   
+                         deletedObjects.then(function(result) {
+                             console.log("deleteObjects API returned ", result);    
+                             sendResponse(event, context, "SUCCESS");
+                         }, function(err) {
+                             console.log("ERROR: deleteObjects API Call failed!");
+                             console.log(err);
+                             sendResponse(event, context, "FAILED");
+                         });
+                     }
+                  }, function(err) {
+                     console.log("ERROR: listObjects API Call failed!");
+                     console.log(err);
+                     sendResponse(event, context, "FAILED");
+                  });
+      
+              } else {
+                console.log("Delete not requested.");
+                sendResponse(event, context, "SUCCESS");
+              }
+      
+            }
+          };
+          
+          function listObjects(client, bucketName) {
+            return new Promise(function (resolve, reject){
+              client.listObjectsV2({Bucket: bucketName}, function (err, res){
+                if (err) reject(err);
+                else resolve(res);
+              });
+            });
+          }
+            
+          function deleteObjects(client, params) {
+            return new Promise(function (resolve, reject){
+              client.deleteObjects(params, function (err, res){
+                if (err) reject(err);
+                else resolve(res);
+              });
+            });
+          }
+            
+          function sendResponse(event, context, responseStatus, responseData, physicalResourceId, noEcho) {
+            var responseBody = JSON.stringify({
+              Status: responseStatus,
+              Reason: "See the details in CloudWatch Log Stream: " + context.logStreamName,
+              PhysicalResourceId: physicalResourceId || context.logStreamName,
+              StackId: event.StackId,
+              RequestId: event.RequestId,
+              LogicalResourceId: event.LogicalResourceId,
+              NoEcho: noEcho || false,
+              Data: responseData
+            });
+            
+            console.log("Response body:\n", responseBody);
+        
+            var https = require("https");
+            var url = require("url");
+        
+            var parsedUrl = url.parse(event.ResponseURL);
+            var options = {
+              hostname: parsedUrl.hostname,
+              port: 443,
+              path: parsedUrl.path,
+              method: "PUT",
+              headers: {
+                "content-type": "",
+                "content-length": responseBody.length
+              }
+            };
+            
+            var request = https.request(options, function(response) {
+              console.log("Status code: " + response.statusCode);
+              console.log("Status message: " + response.statusMessage);
+              context.done();
+            });
+            
+            request.on("error", function(error) {
+              console.log("send(..) failed executing https.request(..): " + error);
+              context.done();
+            });
+          
+            request.write(responseBody);
+            request.end();
+          }
+   
+  cleanupServerlessS3Bucket:
+    Type: Custom::cleanupServerlessS3Bucket
+    DependsOn:
+      - CleanBucketFunction
+      - ServerlessS3Bucket
+    Properties:
+      ServiceToken: !GetAtt CleanBucketFunction.Arn
+      BucketName: !Sub ${AWS::StackName}-${Stage}-serverlessdeploy-${AWS::AccountId}-${AWS::Region}
+
+  cleanupArtifactS3Bucket:
+    Type: Custom::cleanupArtifactS3Bucket
+    DependsOn: 
+      - CleanBucketFunction
+      - ArtifactS3Bucket
+    Properties:
+      ServiceToken: !GetAtt CleanBucketFunction.Arn
+      BucketName: !Sub ${AWS::StackName}-${Stage}-artifacts-${AWS::AccountId}-${AWS::Region}
+
+  cleanupStaticWebsiteBucket:
+    Type: Custom::cleanupStaticWebsiteBucket
+    DependsOn: 
+      - CleanBucketFunction
+      - StaticWebsiteBucket
+    Properties:
+      ServiceToken: !GetAtt CleanBucketFunction.Arn
+      BucketName: !Sub ${AWS::StackName}-${Stage}-website-${AWS::AccountId}-${AWS::Region}
+
+  ServerlessS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${Stage}-serverlessdeploy-${AWS::AccountId}-${AWS::Region}
+      # This must match the cleanup BucketName
+    DeletionPolicy: Delete
+
+  ArtifactS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${Stage}-artifacts-${AWS::AccountId}-${AWS::Region}
+      # This must match the cleanup BucketName
+    DeletionPolicy: Delete
+    #DependsOn: cleanupArtifactS3Bucket
+
+  StaticWebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: PublicRead
+      BucketName: !Sub ${AWS::StackName}-${Stage}-website-${AWS::AccountId}-${AWS::Region}
+      # This must match the cleanup BucketName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+    DeletionPolicy: Delete
+    #DependsOn: cleanupStaticWebsiteBucket
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      PolicyDocument:
+        Id: MyPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref StaticWebsiteBucket
+                - /*
+      Bucket: !Ref StaticWebsiteBucket
+
+  CodePipelineRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      #RoleName: !Sub CodePipelineRole-${AWS::StackName}-${Stage}
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: "Allow"
+          Principal:
+            Service: codepipeline.amazonaws.com
+        Version: "2012-10-17"
+      Path: /
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "s3:DeleteObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:ListBucket"
+                  - "s3:PutObject"
+                  - "s3:GetBucketPolicy"
+                Resource:
+                  - !GetAtt ArtifactS3Bucket.Arn
+                  - !Join
+                    - ''
+                    - - !GetAtt ArtifactS3Bucket.Arn
+                      - "/*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "cloudformation:CreateChangeSet"
+                  - "cloudformation:CreateStack"
+                  - "cloudformation:CreateUploadBucket"
+                  - "cloudformation:DeleteStack"
+                  - "cloudformation:Describe*"
+                  - "cloudformation:List*"
+                  - "cloudformation:UpdateStack"
+                  - "cloudformation:ValidateTemplate"
+                  - "cloudformation:ExecuteChangeSet"
+                  - "cloudformation:DeleteChangeSet"
+                  - "cloudformation:SetStackPolicy"
+                Resource: "*"
+              -
+                Effect: "Allow"
+                Action:
+                  - "codebuild:StartBuild"
+                  - "codebuild:BatchGetBuilds"
+                Resource: "*"
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: CodePipelineRole
+    Properties:
+      Name: !Sub "${AWS::StackName}-${Stage}"
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore: 
+        Type: S3
+        Location: !Ref ArtifactS3Bucket
+      Stages:
+        - 
+          Name: Source
+          Actions:
+            -
+              Name: GitHub
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              OutputArtifacts:
+                -  Name: SourceOutput
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubRepository
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubOAuthToken
+        -
+          Name: Build
+          Actions:
+            -
+              Name: CodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              ActionTypeId: 
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: Built
+              Configuration: 
+                ProjectName: !Ref CodeBuildProject
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-${Stage}"
+      ServiceRole: !Ref CodeBuildRole
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/nodejs:8.11.0
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Type: PLAINTEXT
+            Value: !Ref "AWS::Region"
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref "AWS::AccountId"
+          - Name: USERNAME
+            Value: !Ref UserName
+          - Name: EMAIL
+            Value: !Ref Email
+          - Name: STAGE
+            Value: !Ref Stage
+          - Name: S3BUCKET
+            Value: !Ref StaticWebsiteBucket
+          - Name: ArtifactS3Bucket
+            Value: !Ref ArtifactS3Bucket
+          - Name: ServerlessS3Bucket
+            Value: !Ref ServerlessS3Bucket
+          - Name: GitHubUser
+            Value: !Ref GitHubUser
+          - Name: GitHubRepository
+            Value: !Ref GitHubRepository
+          - Name: GitHubBranch
+            Value: !Ref GitHubBranch
+          - Name: GitHubOAuthToken 
+            Value: !Ref GitHubOAuthToken
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: "acme-bots-buildspec.yml"
+      TimeoutInMinutes: 15
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        -  Action: sts:AssumeRole
+           Effect: Allow
+           Principal:
+             Service: codebuild.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                # Does CodeBuild need all of this access?
+                Action:
+                  - cloudwatch:*
+                  - dynamodb:*
+                  - events:*
+                  - iot:*
+                  - s3:*
+                  - xray:*
+                  - logs:*
+                  - ecs:*
+                  - ecr:*
+                  - states:*
+                  - sns:*
+                  - cognito-idp:*
+                  - cognito-identity:*
+                  - codecommit:*
+                  - lambda:*
+                  - codebuild:*
+                  - codepipeline:*
+              - Resource: "*"
+                Effect: Allow
+                Action: 
+                  - iam:*
+              - Resource: "*"
+                Effect: "Allow"
+                Action:
+                  - cloudformation:Get*
+                  - cloudformation:Describe*
+                  - cloudformation:List*
+                  - cloudformation:Create*
+                  - cloudformation:Update*
+                  - cloudformation:ValidateTemplate
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - ec2:*
+                  - elasticloadbalancing:*
+
+Outputs:
+  ArtifactS3Bucket:
+    Description: 'S3 bucket that stores CodePipeline Artifacts.'
+    Value: !Ref ArtifactS3Bucket
+
+  StaticWebsiteBucket:
+    Description: 'S3 bucket that hosts the front-end static website.'
+    Value: !Ref StaticWebsiteBucket
+
+  WebsiteURL:
+    Description: 'URL for the front-end website hosted on S3.'
+    Value: !GetAtt StaticWebsiteBucket.WebsiteURL
+
+  CodePipelineURL:
+    Description: 'The URL for the created pipeline'
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${AWS::StackName}-${Stage}
+
+  CodeBuildProject:
+    Description: 'The project used to run serverless deploy'
+    Value: !Ref CodeBuildProject
+
+

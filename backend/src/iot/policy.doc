@@ -1,0 +1,33 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [{
+        "Effect": "Allow",
+        "Action":["iot:Connect"],
+        "Resource": ["*"]
+    },{
+        "Effect": "Allow",
+        "Action":[
+            "iot:Publish"
+        ],
+        "Resource": [
+            "arn:aws:iot:<AwsRegion>:<AwsAccountId>:topic/myThings/<botId>/telemetry",
+            "arn:aws:iot:<AwsRegion>:<AwsAccountId>:topic/myThings/<botId>/cmds/ack"
+        ]
+    },{
+        "Effect": "Allow",
+        "Action":[
+            "iot:Subscribe"
+        ],
+        "Resource": [
+            "arn:aws:iot:<AwsRegion>:<AwsAccountId>:topicfilter/myThings/<botId>/cmds"
+        ]
+    },{
+        "Effect": "Allow",
+        "Action":[
+            "iot:Receive"
+        ],
+        "Resource": [
+            "arn:aws:iot:<AwsRegion>:<AwsAccountId>:topic/myThings/<botId>/cmds"
+        ]
+    }]
+}

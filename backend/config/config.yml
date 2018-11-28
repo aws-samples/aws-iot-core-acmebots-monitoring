@@ -1,0 +1,21 @@
+username: acmebotsadmin
+email: myemail@example.com
+GitHubUser: mygithubuser
+GitHubRepository: myreponame
+GitHubBranch: master
+GitHubOAuthToken: myprivatetoken
+
+# Do not change anything bellow this comment,
+# unless you REALLY know what you are doing
+
+LambdaS3Bucket: myS3BucketContainingLambdaCode
+
+iotThingsTableName: ${self:service}-${self:provider.stage}-iotThingsTable
+
+# Monitoring
+metricNameSpace: AcmeBots
+lowBatteryBotsCountMetric: lowBatteryCount
+eventsDelayMetric: eventsDelay
+lowBatteryThreshold: 10.0
+cwEventsDelayThreshold: 10000.00
+lowBatteryBotsCountAlarm: acme-bots-LowBatteryBotsCountAlarm
