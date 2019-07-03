@@ -47,7 +47,7 @@ provider:
     stage: dev
     region: us-east-1
     deploymentBucket: mybuckethere
-    runtime: nodejs6.10
+    runtime: nodejs8.10
     tracing: true
     # Look at 'serverless-iam-roles-per-function' plugin to define roles per function
     iamRoleStatements: # permissions for all of your functions can be set here
@@ -170,7 +170,7 @@ functions:
                         - "acmebots.status"
     ecsProvisionBot:
         handler: src/bot/ecsProvisionBot.ecsProvisionBot
-        runtime: nodejs6.10
+        runtime: nodejs8.10
         timeout: 25
         environment:
             TASK_EXEC_ROLE_ARN:
@@ -196,7 +196,7 @@ functions:
 
     ecsDeleteBot:
         handler: src/bot/ecsDeleteBot.ecsDeleteBot
-        runtime: nodejs6.10
+        runtime: nodejs8.10
         timeout: 25
         environment:
             SERVICE: ${self:service}
