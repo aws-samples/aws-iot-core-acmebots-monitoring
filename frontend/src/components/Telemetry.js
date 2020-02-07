@@ -4,7 +4,8 @@ import { Area, AreaChart, Legend, ReferenceLine, ResponsiveContainer, Tooltip, X
 import moment from 'moment';
 import { Auth } from 'aws-amplify';
 import Amplify, { PubSub } from 'aws-amplify';
-import { AWSIoTProvider } from 'aws-amplify/lib/PubSub/Providers';
+// import { AWSIoTProvider } from 'aws-amplify/lib/PubSub/Providers';
+import { AWSIoTProvider } from '@aws-amplify/pubsub/lib/Providers';
 import Config from '../config';
 import DynamoDB from 'aws-sdk/clients/dynamodb';
 import IoT from 'aws-sdk/clients/iot';

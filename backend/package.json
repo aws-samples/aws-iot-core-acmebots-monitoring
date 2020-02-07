@@ -3,15 +3,15 @@
   "description": "",
   "version": "0.1.0",
   "dependencies": {
-    "aws-xray-sdk": "^1.2.0",
+    "aws-xray-sdk": "^2.5.0",
     "json-size": "^1.0.0",
     "npm": "^6.13.7",
-    "serverless-finch": "^2.2.0",
+    "serverless-finch": "^2.5.2",
     "serverless-hooks-plugin": "^1.1.0",
-    "serverless-pseudo-parameters": "^1.6.0"
+    "serverless-pseudo-parameters": "^2.5.0"
   },
   "devDependencies": {
     "serverless-plugin-tracing": "^2.0.0",
-    "serverless-step-functions": "^1.6.1"
+    "serverless-step-functions": "^2.17.1"
   }
 }
