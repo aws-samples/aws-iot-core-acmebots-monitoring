@@ -5,7 +5,7 @@
   "dependencies": {
     "aws-xray-sdk": "^1.2.0",
     "json-size": "^1.0.0",
-    "npm": "^6.2.0",
+    "npm": "^6.13.4",
     "serverless-finch": "^2.2.0",
     "serverless-hooks-plugin": "^1.1.0",
     "serverless-pseudo-parameters": "^1.6.0"
