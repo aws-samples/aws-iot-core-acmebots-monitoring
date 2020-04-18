@@ -47,7 +47,7 @@ provider:
     stage: dev
     region: us-east-1
     deploymentBucket: mybuckethere
-    runtime: nodejs8.10
+    runtime: nodejs12.x
     tracing: true
     # Look at 'serverless-iam-roles-per-function' plugin to define roles per function
     iamRoleStatements: # permissions for all of your functions can be set here
