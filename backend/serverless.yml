@@ -170,7 +170,7 @@ functions:
                         - "acmebots.status"
     ecsProvisionBot:
         handler: src/bot/ecsProvisionBot.ecsProvisionBot
-        runtime: nodejs8.10
+        runtime: nodejs12.x
         timeout: 25
         environment:
             TASK_EXEC_ROLE_ARN:
@@ -196,7 +196,7 @@ functions:
 
     ecsDeleteBot:
         handler: src/bot/ecsDeleteBot.ecsDeleteBot
-        runtime: nodejs8.10
+        runtime: nodejs12.x
         timeout: 25
         environment:
             SERVICE: ${self:service}
@@ -469,7 +469,7 @@ resources:
             Handler: clear-s3-bucket.clearS3Bucket
             Role: 
               Fn::GetAtt: LambdaExecutionCleanupRole.Arn
-            Runtime: nodejs8.10
+            Runtime: nodejs12.x
             Timeout: 25
             Code: 
               S3Bucket: ${self:custom.LambdaS3Bucket}
@@ -482,7 +482,7 @@ resources:
             Handler: clear-ecr-repo.clearEcrRepo
             Role:
               Fn::GetAtt: LambdaExecutionCleanupRole.Arn
-            Runtime: nodejs8.10
+            Runtime: nodejs12.x
             Timeout: 25
             Code:
               S3Bucket: ${self:custom.LambdaS3Bucket}
@@ -495,7 +495,7 @@ resources:
             Handler: clear-ecs-cluster.clearEcsCluster
             Role:
               Fn::GetAtt: LambdaExecutionCleanupRole.Arn
-            Runtime: nodejs8.10
+            Runtime: nodejs12.x
             Timeout: 25
             Code:
               S3Bucket: ${self:custom.LambdaS3Bucket}
@@ -508,7 +508,7 @@ resources:
             Handler: detachPrincipals.clearPrincipals
             Role:
               Fn::GetAtt: LambdaExecutionCleanupRole.Arn
-            Runtime: nodejs8.10
+            Runtime: nodejs12.x
             Timeout: 25
             Code:
               S3Bucket: ${self:custom.LambdaS3Bucket}
