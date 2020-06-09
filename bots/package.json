@@ -3,7 +3,7 @@
     "description": "",
     "version": "0.1.0",
     "dependencies": {
-        "aws-iot-device-sdk": "^2.2.1",
+        "aws-iot-device-sdk": "^2.2.6",
         "aws-sdk": "^2.265.1",
         "js-yaml": "^3.13.1",
         "winston": "^3.1.0"
