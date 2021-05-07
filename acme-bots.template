@@ -122,7 +122,7 @@ Resources:
     Properties: 
       Handler: "index.clearS3Bucket"
       Role: !GetAtt LambdaExecutionS3CleanupRole.Arn
-      Runtime: "nodejs10.x"
+      Runtime: "nodejs14.x"
       Timeout: 25
       Code: 
         ZipFile: >
