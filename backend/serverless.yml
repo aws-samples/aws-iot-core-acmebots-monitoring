@@ -52,31 +52,74 @@ provider:
     # Look at 'serverless-iam-roles-per-function' plugin to define roles per function
     iamRoleStatements: # permissions for all of your functions can be set here
         - Effect: Allow
-          Action: # Gives permission to DynamoDB tables in a specific region
+          Action:
             - cloudwatch:PutMetricData
-            - dynamodb:*
-            - events:PutEvents
-            - iot:*
-            - s3:*
             - xray:PutTraceSegments
             - xray:PutTelemetryRecords
-            - cloudwatch:PutMetricData
             - logs:CreateLogGroup
             - logs:CreateLogStream
             - logs:PutLogEvents
             - events:PutEvents
-            - ecs:*
-            - ecr:*
-            - states:StartExecution
             - sns:Publish
-            - xray:PutTraceSegments
-            - xray:PutTelemetryRecords
           Resource: "*"
         - Effect: Allow
-          Action: # Gives Lambda Permission to PassRoles to ECS
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource:
+            - arn:aws:dynamodb:#{AWS::Region}:#{AWS::AccountId}:table/${file(./config/config.yml):iotThingsTableName}
+            - arn:aws:dynamodb:#{AWS::Region}:#{AWS::AccountId}:table/${file(./config/config.yml):iotThingsTableName}/index/*
+        - Effect: Allow
+          Action:
+            - iot:CreateThing
+            - iot:DeleteThing
+            - iot:DescribeThing
+            - iot:ListThings
+            - iot:CreateKeysAndCertificate
+            - iot:DeleteCertificate
+            - iot:UpdateCertificate
+            - iot:DescribeCertificate
+            - iot:CreatePolicy
+            - iot:DeletePolicy
+            - iot:AttachPolicy
+            - iot:DetachPolicy
+            - iot:AttachThingPrincipal
+            - iot:DetachThingPrincipal
+            - iot:ListThingPrincipals
+            - iot:ListPrincipalPolicies
+            - iot:ListTargetsForPolicy
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+          Resource:
+            - arn:aws:s3:::${self:service}-${self:provider.stage}-keys-and-certs-#{AWS::AccountId}-#{AWS::Region}/*
+        - Effect: Allow
+          Action:
+            - ecs:RunTask
+            - ecs:StopTask
+            - ecs:DescribeTasks
+            - ecs:ListTasks
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - states:StartExecution
+          Resource:
+            - arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:stateMachine:iotCreateThingStepFunction
+            - arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:stateMachine:iotDeleteThingStepFunction
+        - Effect: Allow
+          Action:
             - iam:GetRole
             - iam:PassRole
-          Resource: "*"
+          Resource:
+            - Fn::GetAtt: [ECSTaskExecutionRole, Arn]
+            - Fn::GetAtt: [ECSTaskRole, Arn]
 
 functions:
     iotProvisionThing:
@@ -458,9 +501,16 @@ resources:
                 Statement:
                 - Effect: Allow
                   Action:
-                    - ecs:*
-                    - ecr:*
-                    - iot:*
+                    - ecs:ListTasks
+                    - ecs:StopTask
+                    - ecs:DescribeTasks
+                    - ecr:BatchDeleteImage
+                    - ecr:ListImages
+                    - ecr:DescribeRepositories
+                    - iot:ListTargetsForPolicy
+                    - iot:DetachPolicy
+                    - iot:ListThingPrincipals
+                    - iot:DetachThingPrincipal
                   Resource: '*'
         CleanBucketFunction:
           Type: "AWS::Lambda::Function"
@@ -673,9 +723,23 @@ resources:
                         - 
                             Effect: "Allow"
                             Action: 
-                                - "iot:*"
+                                - "iot:Connect"
                             Resource: 
-                                - "*"
+                                - "arn:aws:iot:#{AWS::Region}:#{AWS::AccountId}:client/${!cognito-identity.amazonaws.com:sub}"
+                        - 
+                            Effect: "Allow"
+                            Action: 
+                                - "iot:Subscribe"
+                            Resource: 
+                                - "arn:aws:iot:#{AWS::Region}:#{AWS::AccountId}:topicfilter/myThings/*"
+                                - "arn:aws:iot:#{AWS::Region}:#{AWS::AccountId}:topicfilter/$aws/events/presence/*"
+                        - 
+                            Effect: "Allow"
+                            Action: 
+                                - "iot:Receive"
+                            Resource: 
+                                - "arn:aws:iot:#{AWS::Region}:#{AWS::AccountId}:topic/myThings/*"
+                                - "arn:aws:iot:#{AWS::Region}:#{AWS::AccountId}:topic/$aws/events/presence/*"
         # BUILD VPC (2 public, 2 private subnets) AND ECS CLUSTER
         VPC:
             Type: AWS::EC2::VPC
